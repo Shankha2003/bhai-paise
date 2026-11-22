@@ -1,0 +1,6 @@
+{
+  "name": "Bhai Paise",
+  "description": "Minimalist open-source bill-splitting app with smart debt simplification and instant UPI settlements.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
