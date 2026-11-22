@@ -19,7 +19,16 @@ Download the Android app's `google-services.json` from Firebase Console and plac
 
 ## Build a release
 
-Create a private upload keystore and set `KEYSTORE_PATH`, `STORE_PASSWORD`, and `KEY_PASSWORD` in your local build environment before building the release variant. Never commit keystore files or passwords. The release signing key is not included in this repository.
+The release signing key is intentionally not included. Create it once and keep a secure backup; losing it can prevent future updates from using the same signing identity.
+
+```sh
+mkdir -p "$HOME/.android"
+keytool -genkeypair -v \
+  -keystore "$HOME/.android/bhai-paise-upload.jks" \
+  -storetype JKS -alias upload -keyalg RSA -keysize 2048 -validity 10000
+```
+
+`keytool` prompts for the keystore and key passwords. Keep them private and make `KEYSTORE_PATH`, `STORE_PASSWORD`, and `KEY_PASSWORD` available to Gradle in your local environment. Do not put passwords in source files or commit them. Then build the Play Store bundle with `./gradlew bundleRelease`.
 
 ## Privacy and configuration
 
