@@ -36,7 +36,15 @@ keytool -genkeypair -v \
   -storetype JKS -alias upload -keyalg RSA -keysize 2048 -validity 10000
 ```
 
-`keytool` prompts for the keystore and key passwords. Keep them private and make `KEYSTORE_PATH`, `STORE_PASSWORD`, and `KEY_PASSWORD` available to Gradle in your local environment. Do not put passwords in source files or commit them. Then build the Play Store bundle with `./gradlew bundleRelease`.
+`keytool` prompts for the keystore and key passwords. Keep them private. You can put them in a local `keystore.properties` file at the project root (this file is ignored by Git):
+
+```properties
+KEYSTORE_PATH=/absolute/path/to/my-upload-key.jks
+STORE_PASSWORD=your-keystore-password
+KEY_PASSWORD=your-key-password
+```
+
+If the key password matches the keystore password, `KEY_PASSWORD` can be omitted. The same values can instead be supplied as environment variables. Then build the Play Store bundle with `./gradlew bundleRelease`.
 
 ## Privacy and configuration
 

@@ -5,6 +5,7 @@
 **/.DS_Store
 local.properties
 .env
+keystore.properties
 build/
 captures/
 .externalNativeBuild/

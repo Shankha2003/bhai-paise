@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.util.Properties
 
 plugins {
   alias(libs.plugins.android.application)
@@ -7,6 +8,21 @@ plugins {
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
 }
+
+val signingPropertiesFile = rootProject.file("keystore.properties")
+val signingProperties = Properties().apply {
+  if (signingPropertiesFile.isFile) signingPropertiesFile.inputStream().use { load(it) }
+}
+fun signingValue(name: String): String? =
+  System.getenv(name)?.takeIf { it.isNotBlank() }
+    ?: signingProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+
+val releaseKeystorePath = signingValue("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
+val releaseKeystore = file(releaseKeystorePath)
+val releaseStorePassword = signingValue("STORE_PASSWORD")
+val releaseKeyPassword = signingValue("KEY_PASSWORD") ?: releaseStorePassword
+val releaseSigningReady = releaseKeystore.isFile &&
+  !releaseStorePassword.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
 
 android {
   namespace = "com.example"
@@ -25,12 +41,13 @@ android {
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
   // and updating Android apps in AI Studio.
   signingConfigs {
-    create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+    if (releaseSigningReady) {
+      create("release") {
+        storeFile = releaseKeystore
+        storePassword = releaseStorePassword
+        keyAlias = "upload"
+        keyPassword = releaseKeyPassword
+      }
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
@@ -47,7 +64,7 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
-      signingConfig = signingConfigs.getByName("release")
+      signingConfig = if (releaseSigningReady) signingConfigs.getByName("release") else null
     }
     debug {
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
@@ -67,6 +84,16 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+}
+
+tasks.configureEach {
+  if (name == "packageRelease" || name == "bundleRelease") {
+    doFirst {
+      check(releaseSigningReady) {
+        "Release signing is not configured. Add KEYSTORE_PATH and STORE_PASSWORD to the ignored keystore.properties file; KEY_PASSWORD may be omitted if it matches STORE_PASSWORD."
+      }
+    }
   }
 }
 
