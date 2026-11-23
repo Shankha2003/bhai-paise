@@ -17,6 +17,14 @@ The Android app is registered in Firebase project `bhai-paise` with package `com
 
 Download the Android app's `google-services.json` from Firebase Console and place it at `app/google-services.json`. That file is intentionally ignored by Git. Configure Firebase Authentication's Email/Password provider and deploy the repository's `firestore.rules` to the same Firebase project. Users need verified email accounts to create or join synced groups.
 
+## Group-join notifications
+
+The Android app registers verified users' Firebase Cloud Messaging tokens under `userDevices/{uid}/tokens`. The Cloud Function in `functions/` sends push alerts to existing group members when a new verified member joins. It also writes one email per existing member to the `mail` collection.
+
+To enable delivery, first link the Firebase project to the Blaze plan. Cloud Functions requires Blaze and can incur charges based on usage. Then install the official **Trigger Email** Firebase Extension and configure it with an SMTP sender account; use the `mail` collection. The extension needs SMTP credentials, which must be entered in Firebase and must not be committed to this repository. Finally, install Firebase CLI, sign in to project `bhai-paise`, and deploy with `firebase deploy --only firestore:rules,functions`. Build and install app version 1.2.0 or newer so devices register their push tokens.
+
+The Trigger Email extension sends emails from documents in the configured collection and requires SMTP connection details. See the [Firebase Trigger Email setup](https://firebase.google.com/docs/extensions/official/firestore-send-email) and [Cloud Functions getting started guide](https://firebase.google.com/docs/functions/get-started).
+
 ## Build a release
 
 The release signing key is intentionally not included. Create it once and keep a secure backup; losing it can prevent future updates from using the same signing identity.

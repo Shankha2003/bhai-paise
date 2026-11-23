@@ -4,9 +4,13 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
+import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -23,6 +27,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -118,7 +125,24 @@ fun SliceSplitApp(
     state: SliceSplitUiState,
     viewModel: SliceSplitViewModel,
 ) {
+    val context = LocalContext.current
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
     var toastMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(state.accountEmail) {
+        if (state.accountEmail != null && Build.VERSION.SDK_INT >= 33) {
+            val permission = android.Manifest.permission.POST_NOTIFICATIONS
+            val askedBefore = context.getSharedPreferences("notification_permission", android.content.Context.MODE_PRIVATE)
+                .getBoolean("asked", false)
+            if (!askedBefore && ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED) {
+                context.getSharedPreferences("notification_permission", android.content.Context.MODE_PRIVATE)
+                    .edit().putBoolean("asked", true).apply()
+                notificationPermissionLauncher.launch(permission)
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.toastEvents.collect { msg ->
@@ -134,6 +158,26 @@ fun SliceSplitApp(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        state.updateAvailable?.let { update ->
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissUpdate() },
+                title = { Text("Bhai Paise update available") },
+                text = { Text("Version ${update.version} is ready to download.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.dismissUpdate()
+                        val target = update.downloadUrl ?: update.releaseUrl
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
+                        }
+                    }) { Text("Download update") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissUpdate() }) { Text("Later") }
+                },
+            )
+        }
+
         // Primary stage transition (Splash -> Onboarding -> Main)
         AnimatedContent(
             targetState = state.stage,

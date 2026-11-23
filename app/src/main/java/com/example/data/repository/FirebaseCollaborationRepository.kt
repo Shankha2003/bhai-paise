@@ -16,6 +16,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.security.SecureRandom
 import java.util.Date
@@ -31,6 +32,7 @@ class FirebaseCollaborationRepository(context: Context) {
     val isConfigured: Boolean get() = firestore != null
     val isSignedIn: Boolean get() = auth?.currentUser?.let { it.isEmailVerified } == true
     private val uid: String? get() = auth?.currentUser?.takeIf { it.isEmailVerified }?.uid
+    val currentUserUid: String? get() = uid
 
     suspend fun createGroup(group: Group, members: List<Member>): String? {
         val currentUid = uid ?: return null
@@ -93,6 +95,7 @@ class FirebaseCollaborationRepository(context: Context) {
             "contact" to (user.email ?: ""),
             "upiId" to upiId,
             "userUid" to currentUid,
+            "joinedAt" to System.currentTimeMillis(),
         )
         db.runTransaction { transaction ->
             val inviteSnap = transaction.get(inviteRef)
@@ -141,6 +144,22 @@ class FirebaseCollaborationRepository(context: Context) {
                     runCatching { doc.toCloudSnapshot(currentUid) }.getOrNull()
                 })
             }
+    }
+
+    suspend fun registerPushToken() {
+        val currentUid = uid ?: return
+        val db = firestore ?: return
+        val token = FirebaseMessaging.getInstance().token.awaitResult()
+        db.collection("userDevices").document(currentUid).collection("tokens").document(token)
+            .set(mapOf("updatedAt" to System.currentTimeMillis())).awaitResult()
+    }
+
+    suspend fun unregisterPushToken() {
+        val currentUid = uid ?: return
+        val db = firestore ?: return
+        val token = FirebaseMessaging.getInstance().token.awaitResult()
+        db.collection("userDevices").document(currentUid).collection("tokens").document(token)
+            .delete().awaitResult()
     }
 
     fun inviteCodeFor(groupId: String, onResult: (String?) -> Unit) {
@@ -210,6 +229,18 @@ class FirebaseCollaborationRepository(context: Context) {
                 contact = fields["contact"] as? String ?: "",
             )
         }
+        val joinEvents = memberData.mapNotNull { (key, value) ->
+            val memberId = key as? String ?: return@mapNotNull null
+            val fields = value as? Map<*, *> ?: return@mapNotNull null
+            val userUid = fields["userUid"] as? String ?: return@mapNotNull null
+            val joinedAt = (fields["joinedAt"] as? Number)?.toLong()?.takeIf { it > 0L } ?: return@mapNotNull null
+            CloudGroupJoinEvent(
+                id = "${memberId}_$joinedAt",
+                userUid = userUid,
+                memberName = fields["name"] as? String ?: "A member",
+                joinedAt = joinedAt,
+            )
+        }.sortedBy { it.joinedAt }
         val expenseData = data["expenses"] as? Map<*, *> ?: emptyMap<Any, Any>()
         val expenses = expenseData.mapNotNull { (_, value) ->
             val fields = value as? Map<*, *> ?: return@mapNotNull null
@@ -247,6 +278,7 @@ class FirebaseCollaborationRepository(context: Context) {
             members = members,
             expenses = expenses,
             inviteCode = data["inviteCode"] as? String,
+            joinEvents = joinEvents,
         )
     }
 
@@ -272,4 +304,12 @@ data class CloudGroupSnapshot(
     val members: List<Member>,
     val expenses: List<Expense>,
     val inviteCode: String?,
+    val joinEvents: List<CloudGroupJoinEvent> = emptyList(),
+)
+
+data class CloudGroupJoinEvent(
+    val id: String,
+    val userUid: String,
+    val memberName: String,
+    val joinedAt: Long,
 )

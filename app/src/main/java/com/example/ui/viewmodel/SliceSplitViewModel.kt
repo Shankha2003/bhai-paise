@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.SliceSplitDatabase
@@ -24,6 +25,8 @@ import com.example.data.prefs.PreferencesRepository
 import com.example.data.repository.SliceSplitRepository
 import com.example.data.repository.FirebaseAccountRepository
 import com.example.data.repository.FirebaseCollaborationRepository
+import com.example.data.repository.GitHubUpdateRepository
+import com.example.data.repository.AppUpdate
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -103,6 +106,7 @@ data class SliceSplitUiState(
     val accountBusy: Boolean = false,
     val accountMessage: String? = null,
     val groupInviteCodes: Map<String, String> = emptyMap(),
+    val updateAvailable: AppUpdate? = null,
 )
 
 class SliceSplitViewModel(application: Application) : AndroidViewModel(application) {
@@ -112,12 +116,15 @@ class SliceSplitViewModel(application: Application) : AndroidViewModel(applicati
     private val prefsRepository = PreferencesRepository(application)
     private val accountRepository = FirebaseAccountRepository(application)
     private val collaborationRepository = FirebaseCollaborationRepository(application)
+    private val updateRepository = GitHubUpdateRepository(application)
+    private val groupNotificationPrefs = application.getSharedPreferences("group_join_notifications", Context.MODE_PRIVATE)
     private var cloudGroupsListener: ListenerRegistration? = null
     private val _firebaseConfigured = MutableStateFlow(accountRepository.isConfigured)
     private val _accountEmail = MutableStateFlow(accountRepository.verifiedEmail)
     private val _accountBusy = MutableStateFlow(false)
     private val _accountMessage = MutableStateFlow<String?>(null)
     private val _groupInviteCodes = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val _updateAvailable = MutableStateFlow<AppUpdate?>(null)
 
     private val _stage = MutableStateFlow(AppStage.SPLASH)
     private val _splashProgress = MutableStateFlow(0f)
@@ -144,6 +151,7 @@ class SliceSplitViewModel(application: Application) : AndroidViewModel(applicati
         val busy: Boolean,
         val message: String?,
         val inviteCodes: Map<String, String>,
+        val update: AppUpdate?,
     )
 
     private data class NavSubState(
@@ -183,6 +191,16 @@ class SliceSplitViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
+    private val accountUiFlow = combine(
+        _firebaseConfigured,
+        _accountEmail,
+        _accountBusy,
+        _accountMessage,
+        _groupInviteCodes,
+    ) { configured, email, busy, message, invites ->
+        AccountUiInputs(configured, email, busy, message, invites, null)
+    }.combine(_updateAvailable) { account, update -> account.copy(update = update) }
+
     val uiState: StateFlow<SliceSplitUiState> = combine(
         navFlow,
         repository.members,
@@ -191,11 +209,7 @@ class SliceSplitViewModel(application: Application) : AndroidViewModel(applicati
         prefsRepository.preferences,
     ) { nav, members, groups, expenses, prefs ->
         CoreUiInputs(nav, members, groups, expenses, prefs)
-    }.combine(
-        combine(_firebaseConfigured, _accountEmail, _accountBusy, _accountMessage, _groupInviteCodes) { configured, email, busy, message, invites ->
-            AccountUiInputs(configured, email, busy, message, invites)
-        },
-    ) { core, account ->
+    }.combine(accountUiFlow) { core, account ->
         val nav = core.nav
         val members = core.members
         val groups = core.groups
@@ -279,6 +293,7 @@ class SliceSplitViewModel(application: Application) : AndroidViewModel(applicati
             accountEmail = accountEmail,
             accountBusy = accountBusy,
             accountMessage = accountMessage,
+            updateAvailable = account.update,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -287,6 +302,9 @@ class SliceSplitViewModel(application: Application) : AndroidViewModel(applicati
     )
 
     init {
+        viewModelScope.launch {
+            _updateAvailable.value = updateRepository.checkForUpdate(com.example.BuildConfig.VERSION_NAME)
+        }
         viewModelScope.launch {
             repository.ensureSeeded()
             if (collaborationRepository.isSignedIn) startCloudSync()
@@ -557,6 +575,10 @@ class SliceSplitViewModel(application: Application) : AndroidViewModel(applicati
         _accountMessage.value = null
     }
 
+    fun dismissUpdate() {
+        _updateAvailable.value = null
+    }
+
     fun createAccount(name: String, email: String, password: String) {
         viewModelScope.launch {
             _accountBusy.value = true
@@ -587,12 +609,25 @@ class SliceSplitViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun startCloudSync() {
+        viewModelScope.launch {
+            runCatching { collaborationRepository.registerPushToken() }
+                .onFailure { _toastEvents.tryEmit("Could not enable push alerts: ${it.message ?: "try again later"}") }
+        }
         cloudGroupsListener?.remove()
         cloudGroupsListener = collaborationRepository.listenForMyGroups(
             onGroups = { snapshots ->
                 _groupInviteCodes.value = snapshots.mapNotNull { snapshot ->
                     snapshot.inviteCode?.let { snapshot.group.id to it }
                 }.toMap()
+                val seen = groupNotificationPrefs.getStringSet("seen_events", emptySet()).orEmpty().toMutableSet()
+                snapshots.forEach { snapshot ->
+                    snapshot.joinEvents.forEach { event ->
+                        if (seen.add(event.id) && event.userUid != collaborationRepository.currentUserUid) {
+                            _toastEvents.tryEmit("${event.memberName} joined ${snapshot.group.name}")
+                        }
+                    }
+                }
+                groupNotificationPrefs.edit().putStringSet("seen_events", seen).apply()
                 viewModelScope.launch { snapshots.forEach { repository.applyCloudSnapshot(it) } }
             },
             onError = { error -> _toastEvents.tryEmit("Cloud sync error: ${error.message ?: "check connection"}") },
@@ -620,9 +655,12 @@ class SliceSplitViewModel(application: Application) : AndroidViewModel(applicati
     fun signOut() {
         cloudGroupsListener?.remove()
         cloudGroupsListener = null
-        accountRepository.signOut()
-        _accountEmail.value = null
-        _accountMessage.value = "Signed out. Your local bills are still on this device."
+        viewModelScope.launch {
+            runCatching { collaborationRepository.unregisterPushToken() }
+            accountRepository.signOut()
+            _accountEmail.value = null
+            _accountMessage.value = "Signed out. Your local bills are still on this device."
+        }
     }
 
     fun setThemeMode(mode: ThemeMode) {
